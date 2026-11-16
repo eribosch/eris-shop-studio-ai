@@ -19,14 +19,17 @@ function json(data, status, origin) {
 export default {
   async fetch(request, env) {
     const origin = request.headers.get("Origin") || "";
-    if (request.method === "OPTIONS") {
-      return new Response(null, { status: 204, headers: cors(origin) });
-    }
+    if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors(origin) });
     if (origin !== ALLOWED_ORIGIN) return json({ error: "Origen no autorizado." }, 403, origin);
     if (request.method !== "POST") return json({ error: "Usa POST para generar." }, 405, origin);
     if (!env.FAL_API_KEY) return json({ error: "Falta configurar FAL_API_KEY en Cloudflare." }, 500, origin);
+    if (!env.GENERATE_LIMITER) return json({ error: "Falta configurar el límite de solicitudes GENERATE_LIMITER en Cloudflare." }, 503, origin);
 
     try {
+      const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+      const rate = await env.GENERATE_LIMITER.limit({ key: ip });
+      if (!rate.success) return json({ error: "Has alcanzado el límite temporal. Espera un minuto e inténtalo de nuevo." }, 429, origin);
+
       const body = await request.json();
       const { prompt, imageDataUrl } = body || {};
       if (typeof prompt !== "string" || prompt.length < 10 || prompt.length > 5000) {
@@ -39,22 +42,11 @@ export default {
 
       const upstream = await fetch("https://fal.run/" + MODEL, {
         method: "POST",
-        headers: {
-          "Authorization": "Key " + env.FAL_API_KEY,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          prompt,
-          image_url: imageDataUrl,
-          num_images: 1,
-          output_format: "png",
-          guidance_scale: 3.5
-        })
+        headers: { "Authorization": "Key " + env.FAL_API_KEY, "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt, image_url: imageDataUrl, num_images: 1, output_format: "png", guidance_scale: 3.5 })
       });
       const result = await upstream.json().catch(() => ({}));
-      if (!upstream.ok) {
-        return json({ error: result.detail || result.message || "El servicio de imágenes rechazó la solicitud.", upstreamStatus: upstream.status }, 502, origin);
-      }
+      if (!upstream.ok) return json({ error: result.detail || result.message || "El servicio de imágenes rechazó la solicitud.", upstreamStatus: upstream.status }, 502, origin);
       const imageUrl = result.images && result.images[0] && result.images[0].url;
       if (!imageUrl) return json({ error: "El servicio respondió, pero no devolvió una imagen." }, 502, origin);
       return json({ imageUrl, width: result.images[0].width || null, height: result.images[0].height || null }, 200, origin);
