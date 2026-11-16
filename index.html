@@ -28,8 +28,25 @@ function showMockPreview(){const p=products.find(x=>x.id===+$('mockProduct').val
 $('mockProduct').onchange=showMockPreview;
 $('buildPrompt').onclick=()=>{const p=products.find(x=>x.id===+$('mockProduct').value);if(!p||!p.file){alert('Primero selecciona un producto con imagen en Estudio.');return;}const text='TAREA: Crear una fotografía comercial de '+p.type+'.\nESCENA: '+$('mockScene').value+'.\nCOLOR DEL PRODUCTO: '+$('mockColor').value+'.\nFORMATO: '+$('mockFormat').value+'.\nDISEÑO DE REFERENCIA: usar exactamente el archivo original "'+p.file.name+'".\nREGLAS OBLIGATORIAS: no redibujar, reescribir, traducir, corregir ni inventar letras; no cambiar colores, ilustraciones, proporciones ni composición del estampado. Mantener el diseño completo, legible y fiel al original. Integrarlo como impresión real sobre el producto, respetando pliegues y perspectiva sin deformar el arte. No añadir logotipos ni elementos al diseño.\nDETALLES DEL PRODUCTO: '+(p.notes||'No especificados')+'.\nINSTRUCCIONES EXTRA: '+$('mockExtra').value+'\nCONTROL DE CALIDAD: comparar el resultado con el archivo original antes de publicarlo. Si no puede conservarse el diseño exacto, no inventar una versión aproximada.';$('promptResult').textContent=text;$('copyPrompt').disabled=false;window.mockPrompt=text;};
 $('copyPrompt').onclick=()=>{if(window.mockPrompt&&navigator.clipboard?.writeText)navigator.clipboard.writeText(window.mockPrompt).then(()=>alert('Instrucciones copiadas.')).catch(()=>alert('No se pudo copiar automáticamente; mantén pulsado el texto para copiarlo.'));};
-// El botón queda preparado, pero no realiza cargos hasta completar la protección del Worker.
-$('buildPrompt').addEventListener('click',()=>{$('generateMockup').disabled=!window.mockPrompt;$('generationStatus').textContent=window.mockPrompt?'Instrucciones listas. Falta activar el acceso seguro al generador.':'Prepara primero las instrucciones.';});
-$('generateMockup').onclick=()=>{alert('La conexión segura con fal.ai todavía no está activada. No se ha enviado ninguna solicitud ni se ha realizado ningún cargo.');};
+// Generación de mockup mediante el Worker de Cloudflare. La clave fal permanece en el servidor.
+const ERIS_WORKER_URL='https://eris-shop-ai.erikaboschbb24.workers.dev';
+$('buildPrompt').addEventListener('click',()=>{$('generateMockup').disabled=!window.mockPrompt;$('generationStatus').textContent=window.mockPrompt?'Instrucciones listas. Puedes generar una imagen. Cada generación puede consumir saldo de fal.ai.':'Prepara primero las instrucciones.';});
+function fileAsDataUrl(file){return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(new Error('No se pudo leer la imagen original.'));reader.readAsDataURL(file);});}
+$('generateMockup').onclick=async()=>{
+ const p=products.find(x=>x.id===+$('mockProduct').value);
+ if(!p||!p.file||!window.mockPrompt){alert('Selecciona un producto con imagen y prepara primero las instrucciones.');return;}
+ if(p.file.size>6*1024*1024){alert('La imagen pesa más de 6 MB. Usa una versión más ligera.');return;}
+ $('generateMockup').disabled=true;$('generationStatus').textContent='Preparando tu imagen y enviándola al generador…';$('generatedResult').textContent='Generando. Puede tardar un poco.';
+ try{
+  const imageDataUrl=await fileAsDataUrl(p.file);
+  const response=await fetch(ERIS_WORKER_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt:window.mockPrompt,imageDataUrl})});
+  const data=await response.json().catch(()=>({}));
+  if(!response.ok)throw new Error(data.error||'No se pudo generar la imagen (HTTP '+response.status+').');
+  if(!data.imageUrl)throw new Error('El generador no devolvió una imagen.');
+  $('generatedResult').innerHTML='<img src="'+esc(data.imageUrl)+'" alt="Mockup generado" style="max-width:100%;height:auto;display:block;margin:auto;border-radius:10px"><p>Mockup generado. Revisa que el estampado coincida con tu archivo original.</p><a href="'+esc(data.imageUrl)+'" target="_blank" rel="noopener">Abrir imagen original</a>';
+  $('generationStatus').textContent='Imagen recibida. Revisa cuidadosamente la fidelidad del diseño.';
+ }catch(error){$('generatedResult').textContent='No se pudo generar: '+error.message;$('generationStatus').textContent='Conexión pendiente o error de generación.';}
+ finally{$('generateMockup').disabled=!window.mockPrompt;}
+};
 const oldRender=render;render=function(){oldRender();refreshMockProducts();};refreshMockProducts();
 </script></body></html>
